@@ -112,8 +112,8 @@ def main():
     # 创建环境
     env = PointMassEnv(obstacles=obstacles, max_obstacles=max_obstacles)
     env_state_dim = env.observation_space.shape[0]
-    # 网络输入维度：pos(2) + goal_dir(2) + goal_dist(1) + max_obstacles * (obs_dir(2) + obs_dist(1))
-    network_state_dim = 2 + 3 + max_obstacles * 3
+    # 网络输入维度：pos(2) + vel(2) + goal_dir(2) + goal_dist(1) + max_obstacles * (obs_dir(2) + obs_dist(1))
+    network_state_dim = 2 + 2 + 3 + max_obstacles * 3
     action_dim = env.action_space.shape[0]
     action_bound = env.action_space.high[0]
     
@@ -129,21 +129,22 @@ def main():
     
     print(f"\n开始测试 {num_test_episodes} 个回合...")
     for i in range(num_test_episodes):
-        reward, trajectory = test_episode(env, actor, device, max_obstacles)
+        reward, env_state_trajectory = test_episode(env, actor, device, max_obstacles)
         rewards.append(reward)
         
-        # 检查是否成功（到达目标点）
-        final_dist = np.linalg.norm(trajectory[-1] - env.goal_pos)
+        # 检查是否成功（到达目标点）- 提取位置信息 (前两维)
+        final_pos = env_state_trajectory[-1, :2]
+        final_dist = np.linalg.norm(final_pos - env.goal_pos)
         success = final_dist < env.goal_radius
         if success:
             success_count += 1
         
-        print(f"回合 {i+1}: 总奖励 = {reward:.2f}, 步数 = {len(trajectory)}, "
+        print(f"回合 {i+1}: 总奖励 = {reward:.2f}, 步数 = {len(env_state_trajectory)}, "
               f"最终距离目标 = {final_dist:.3f}, 状态: {'成功' if success else '失败'}")
         
         # 可视化前3个回合
         if i < 5:
-            visualize_trajectory(env, trajectory, i+1, success)
+            visualize_trajectory(env, env_state_trajectory, i+1, success)
     
     # 统计结果
     print("\n" + "="*50)

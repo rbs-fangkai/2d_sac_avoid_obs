@@ -117,7 +117,9 @@ def train_on_policy_agent(env: PointMassEnv, agent, num_episodes):
                 return_list.append(episode_return)
                 # 回合结束后立即使用这批经验更新策略（关键：只使用一次）
                 agent.update(transition_dict)
-                if (i_episode+1) % 10 == 0:
+                if (i_episode+1) % 100 == 0:
+                    pbar.set_postfix({'episode': '%d' % (num_episodes/10 * i + i_episode+1), 'return': '%.3f' % np.mean(return_list[-100:])})
+                elif (i_episode+1) % 10 == 0:
                     pbar.set_postfix({'episode': '%d' % (num_episodes/10 * i + i_episode+1), 'return': '%.3f' % np.mean(return_list[-10:])})
                 pbar.update(1)
     return return_list

@@ -12,9 +12,10 @@ class PointMassEnv:
                 - 矩形: {'type': 'rectangle', 'center': [x, y], 'width': w, 'height': h}
             max_obstacles: 网络支持的最大障碍物数量（用于固定网络输入维度）
         """
-        self.state_dim = 2
-        self.action_dim = 2
-        self.action_bound = 1.0  # Max velocity
+        self.state_dim = 4 # [x, y, vx, vy]
+        self.action_dim = 2 # [ax, ay]
+        self.action_bound = 3.0  # Max acceleration
+        self.velocity_bound = 2.5 # max velocity
         self.dt = 0.1
         self.max_steps = 400
         self.current_step = 0
@@ -22,14 +23,18 @@ class PointMassEnv:
         
         # Environment configuration
         self.start_pos = np.array([0.0, 2.0])
-        self.goal_pos = np.array([2.0, 2.0])
-        self.goal_radius = 0.1
+        self.start_vel = np.array([0.0, 0.0])
+        self.goal_pos = np.array([8.0, 8.0])
+        self.goal_radius = 0.3
         
         # Obstacle configuration - 支持多个不同类型的障碍物
         if obstacles is None:
             # 默认配置：一个圆形障碍物
             self.obstacles = [
-                {'type': 'circle', 'center': np.array([1.0, 1.0]), 'radius': 0.4}
+                {'type': 'circle', 'center': np.array([2.0, 2.0]), 'radius': 1.0},
+                {'type': 'circle', 'center': np.array([2.6, 5.6]), 'radius': 1.0},
+                {'type': 'circle', 'center': np.array([5.6, 2.6]), 'radius': 1.0},
+                {'type': 'circle', 'center': np.array([6.0, 6.0]), 'radius': 1.0}
             ]
         else:
             self.obstacles = []
@@ -44,8 +49,8 @@ class PointMassEnv:
             self.obstacle_radius = self.obstacles[0]['radius']
         
         # Boundaries
-        self.x_min, self.x_max = -1.0, 3.0
-        self.y_min, self.y_max = -1.0, 3.0
+        self.x_min, self.x_max = -1.0, 10.0
+        self.y_min, self.y_max = -1.0, 10.0
         
         # Gym-like attributes for compatibility
         class Space:
@@ -62,45 +67,57 @@ class PointMassEnv:
         np.random.seed(seed)
 
     def reset(self):
-        self.state = self.start_pos.copy()
+        self.state = np.concatenate([self.start_pos, self.start_vel])
         self.current_step = 0
-        return self.state
+        return self.state.copy()
 
     def step(self, action):
         self.current_step += 1
-        # Clip action
+        # Clip action (acceleration)
         action = np.clip(action, -self.action_bound, self.action_bound)
         
-        # Update state (position)
-        next_state = self.state + action * self.dt
+        # Extract current position and velocity
+        curr_pos = self.state[:2]
+        curr_vel = self.state[2:]
         
-        # Clip state to boundaries
-        next_state[0] = np.clip(next_state[0], self.x_min, self.x_max)
-        next_state[1] = np.clip(next_state[1], self.y_min, self.y_max)
+        # Update velocity using acceleration
+        next_vel = curr_vel + action * self.dt
+        # Clip velocity to bounds
+        next_vel = np.clip(next_vel, -self.velocity_bound, self.velocity_bound)
         
-        self.state = next_state
+        # Update position using velocity
+        next_pos = curr_pos + next_vel * self.dt
+        # Clip position to boundaries
+        next_pos[0] = np.clip(next_pos[0], self.x_min, self.x_max)
+        next_pos[1] = np.clip(next_pos[1], self.y_min, self.y_max)
+        
+        # Combine into next state
+        next_state = np.concatenate([next_pos, next_vel])
         
         # Calculate distances
-        dist_to_goal = np.linalg.norm(self.state - self.goal_pos)
+        dist_to_goal = np.linalg.norm(next_pos - self.goal_pos)
         
         # 计算到所有障碍物的最小距离和是否碰撞
         min_dist_to_obs = float('inf')
         collision = False
         for obs in self.obstacles:
-            dist, in_collision = self._distance_to_obstacle(self.state, obs)
+            dist, in_collision = self._distance_to_obstacle(next_pos, obs)
             min_dist_to_obs = min(min_dist_to_obs, dist)
             if in_collision:
                 collision = True
         
         # Reward function
         distance_panalty = -np.log(3*dist_to_goal + 1e-6)  # 距离惩罚,当距离小于0.33时,奖励大于0，反之为负
-        curr_dist_to_goal = np.linalg.norm(self.state - self.goal_pos)
-        next_dist_to_goal = np.linalg.norm(next_state - self.goal_pos)
+        curr_dist_to_goal = np.linalg.norm(curr_pos - self.goal_pos)
+        next_dist_to_goal = dist_to_goal  # 已经计算过了
         closer_reward = 0.0 * (curr_dist_to_goal - next_dist_to_goal)  # 靠近目标奖励
         energy_penalty = -0.01 * np.sum(np.square(action)) # 能量惩罚
         reward = (distance_panalty +
                   closer_reward +
                   energy_penalty)
+        
+        # Update state
+        self.state = next_state
         
         done = False
         
@@ -173,17 +190,18 @@ class PointMassEnv:
 def env_states_to_network_states(states: torch.Tensor, goal_pos, obstacles: List[Dict], max_obstacles: int = 5) -> torch.Tensor:
     """将环境状态转换为网络输入状态（支持多个障碍物）
     
-    环境状态只包含位置信息，网络状态还包含目标和所有障碍物的相对位置信息。
+    环境状态包含位置和速度信息，网络状态只使用位置，并包含目标和所有障碍物的相对位置信息。
     
     Args:
-        states: 环境状态张量 [batch_size, 2] - 只包含位置(x, y)
+        states: 环境状态张量 [batch_size, 4] - 包含位置和速度 [x, y, vx, vy]
         goal_pos: 目标位置，可以是numpy数组或torch张量
         obstacles: 障碍物列表，每个元素是包含 'center' 的字典
         max_obstacles: 最大障碍物数量（用于固定网络输入维度）
         
     Returns:
-        网络状态张量 [batch_size, 2 + 3 + max_obstacles * 3]:
-        - states (2): 当前位置
+        网络状态张量 [batch_size, 2 + 2 + 3 + max_obstacles * 3]:
+        - positions (2): 当前位置
+        - velocities (2): 当前速度
         - goal_rel_dirs (2): 目标相对方向（归一化）
         - goal_rel_dists (1): 目标相对距离
         - 对每个障碍物槽位 (max_obstacles 个):
@@ -193,6 +211,10 @@ def env_states_to_network_states(states: torch.Tensor, goal_pos, obstacles: List
     batch_size = states.shape[0]
     device = states.device
     
+    # 提取位置和速度
+    positions = states[:, :2]  # [batch_size, 2]
+    velocities = states[:, 2:4]  # [batch_size, 2]
+    
     # 转换目标位置
     if isinstance(goal_pos, torch.Tensor):
         goal = goal_pos.clone().detach().to(device)
@@ -200,7 +222,7 @@ def env_states_to_network_states(states: torch.Tensor, goal_pos, obstacles: List
         goal = torch.tensor(goal_pos, dtype=torch.float).to(device)
     
     # 计算目标的相对信息
-    goal_rel_vecs = goal.unsqueeze(0) - states  # [batch_size, 2]
+    goal_rel_vecs = goal.unsqueeze(0) - positions  # [batch_size, 2]
     goal_rel_dists = torch.norm(goal_rel_vecs, dim=1, keepdim=True)  # [batch_size, 1]
     goal_rel_dirs = goal_rel_vecs / (goal_rel_dists + 1e-6)  # 归一化
     
@@ -216,7 +238,7 @@ def env_states_to_network_states(states: torch.Tensor, goal_pos, obstacles: List
             obs_center = torch.tensor(obs['center'], dtype=torch.float).to(device)
         
         # 计算相对向量和距离
-        obs_rel_vecs = obs_center.unsqueeze(0) - states  # [batch_size, 2]
+        obs_rel_vecs = obs_center.unsqueeze(0) - positions  # [batch_size, 2]
         obs_rel_dists = torch.norm(obs_rel_vecs, dim=1, keepdim=True)  # [batch_size, 1]
         obs_rel_dirs = obs_rel_vecs / (obs_rel_dists + 1e-6)  # [batch_size, 2]
         
@@ -224,6 +246,6 @@ def env_states_to_network_states(states: torch.Tensor, goal_pos, obstacles: List
         obs_features[:, i*3:i*3+2] = obs_rel_dirs
         obs_features[:, i*3+2:i*3+3] = obs_rel_dists
     
-    # 拼接所有特征
-    network_states = torch.cat([states, goal_rel_dirs, goal_rel_dists, obs_features], dim=1)
+    # 拼接所有特征：位置 + 速度 + 目标信息 + 障碍物信息
+    network_states = torch.cat([positions, velocities, goal_rel_dirs, goal_rel_dists, obs_features], dim=1)
     return network_states

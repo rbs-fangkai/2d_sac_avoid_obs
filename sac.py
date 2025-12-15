@@ -161,12 +161,11 @@ class SACContinuous:
 
 # 配置障碍物：支持圆形和矩形
 obstacles = [
-    {'type': 'rectangle', 'center': [1.0, 2.0], 'width': 0.5, 'height': 2.0},
-    {'type': 'rectangle', 'center': [1.5, 0.5], 'width': 0.3, 'height': 1.0},
-    {'type': 'rectangle', 'center': [1.0, -0.5], 'width': 2.0, 'height': 0.6},
-    {'type': 'rectangle', 'center': [-0.5, 1.0], 'width': 1.0, 'height': 0.6},
-    # {'type': 'circle', 'center': [1.0, 1.0], 'radius': 0.3},
-]
+                {'type': 'circle', 'center': np.array([2.0, 2.0]), 'radius': 1.0},
+                {'type': 'circle', 'center': np.array([2.6, 5.6]), 'radius': 1.0},
+                {'type': 'circle', 'center': np.array([5.6, 2.6]), 'radius': 1.0},
+                {'type': 'circle', 'center': np.array([6.0, 6.0]), 'radius': 1.0}
+            ]
 max_obstacles = len(obstacles)  # 网络支持的最大障碍物数量
 if __name__ == '__main__':
     env_name = 'PointMass-v0'
@@ -174,14 +173,16 @@ if __name__ == '__main__':
     
     env = PointMassEnv(obstacles=obstacles, max_obstacles=max_obstacles)
     env_state_dim = env.observation_space.shape[0]
-    # 网络输入维度：pos(2) + goal_dir(2) + goal_dist(1) + max_obstacles * (obs_dir(2) + obs_dist(1))
-    network_state_dim = 2 + 3 + max_obstacles * 3
+    # 网络输入维度：pos(2) + vel(2) + goal_dir(2) + goal_dist(1) + max_obstacles * (obs_dir(2) + obs_dist(1))
+    network_state_dim = 2 + 2 + 3 + max_obstacles * 3
     action_dim = env.action_space.shape[0]
     action_bound = env.action_space.high[0]  # 动作最大值
-    random.seed(0)
-    np.random.seed(0)
+    # random.seed(0)
+    # np.random.seed(0)
     env.seed(0)
     torch.manual_seed(0)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(0)
 
     actor_lr = 3e-4
     critic_lr = 3e-3
@@ -237,11 +238,7 @@ if __name__ == '__main__':
     ax.set_ylabel('Episode Lengths')
     ax.set_title('SAC on {}'.format(env_name))
     plt.tight_layout()
-    plt.show()
-    # plt.plot(episodes_list, return_list)
-    # plt.xlabel('Episodes')
-    # plt.ylabel('Returns')
-    # plt.title('SAC on {}'.format(env_name))
+    plt.savefig('sac_training_results.png', dpi=150)
     # plt.show()
 
     mv_return = rl_utils.moving_average(return_list, 9)
@@ -250,11 +247,13 @@ if __name__ == '__main__':
     plt.subplot(1, 2, 1)
     plt.plot(episodes_list, mv_return)
     plt.xlabel('Episodes')
-    plt.ylabel('Returns')
+    plt.ylabel('avg Returns')
     plt.title('SAC on {}'.format(env_name))
     plt.subplot(1, 2, 2)
     plt.plot(episodes_list, mv_len)
     plt.xlabel('Episodes')
-    plt.ylabel('Episode Lengths')
+    plt.ylabel('avg Lengths')
     plt.title('SAC on {}'.format(env_name))
-    plt.show()
+    plt.tight_layout()
+    plt.savefig('sac_moving_average_results.png', dpi=150)
+    # plt.show()
