@@ -16,12 +16,12 @@ class PointMassEnv:
         self.action_dim = 2
         self.action_bound = 1.0  # Max velocity
         self.dt = 0.1
-        self.max_steps = 200
+        self.max_steps = 400
         self.current_step = 0
         self.max_obstacles = max_obstacles
         
         # Environment configuration
-        self.start_pos = np.array([0.0, 0.0])
+        self.start_pos = np.array([0.0, 2.0])
         self.goal_pos = np.array([2.0, 2.0])
         self.goal_radius = 0.1
         
@@ -96,7 +96,7 @@ class PointMassEnv:
         distance_panalty = -np.log(3*dist_to_goal + 1e-6)  # 距离惩罚,当距离小于0.33时,奖励大于0，反之为负
         curr_dist_to_goal = np.linalg.norm(self.state - self.goal_pos)
         next_dist_to_goal = np.linalg.norm(next_state - self.goal_pos)
-        closer_reward = 0.1 * (curr_dist_to_goal - next_dist_to_goal)  # 靠近目标奖励
+        closer_reward = 0.0 * (curr_dist_to_goal - next_dist_to_goal)  # 靠近目标奖励
         energy_penalty = -0.01 * np.sum(np.square(action)) # 能量惩罚
         reward = (distance_panalty +
                   closer_reward +

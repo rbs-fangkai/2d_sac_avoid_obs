@@ -153,11 +153,13 @@ def train_off_policy_agent(env, agent, num_episodes, replay_buffer, minimal_size
         return_list: 每个回合的累计奖励列表
     """
     return_list = []
+    episode_len_list = []
     # 分10次迭代训练，便于显示进度
     for i in range(10):
         with tqdm(total=int(num_episodes/10), desc='Iteration %d' % i) as pbar:
             for i_episode in range(int(num_episodes/10)):
                 episode_return = 0
+                episode_len = 0
                 state = env.reset()
                 done = False
                 while not done:
@@ -167,6 +169,7 @@ def train_off_policy_agent(env, agent, num_episodes, replay_buffer, minimal_size
                     replay_buffer.add(state, action, reward, next_state, done)
                     state = next_state
                     episode_return += reward
+                    episode_len += 1
                     # 缓冲区有足够经验后，每一步都进行策略更新
                     if replay_buffer.size() > minimal_size:
                         # 从缓冲区随机采样批次数据（可能包含很久以前的经验）
@@ -175,10 +178,11 @@ def train_off_policy_agent(env, agent, num_episodes, replay_buffer, minimal_size
                         # 使用采样的数据更新策略（关键：数据可重复使用）
                         agent.update(transition_dict)
                 return_list.append(episode_return)
+                episode_len_list.append(episode_len)
                 if (i_episode+1) % 10 == 0:
-                    pbar.set_postfix({'episode': '%d' % (num_episodes/10 * i + i_episode+1), 'return': '%.3f' % np.mean(return_list[-10:])})
+                    pbar.set_postfix({'episode': '%d' % (num_episodes/10 * i + i_episode+1), 'return': '%.3f' % np.mean(return_list[-10:]), 'avg_len': '%.1f' % np.mean(episode_len_list[-10:])})
                 pbar.update(1)
-    return return_list
+    return return_list, episode_len_list
 
 
 def compute_advantage(gamma, lmbda, td_delta):

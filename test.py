@@ -43,6 +43,10 @@ def visualize_trajectory(env, trajectory, episode_num, success):
     # 绘制边界
     ax.set_xlim(env.x_min - 0.5, env.x_max + 0.5)
     ax.set_ylim(env.y_min - 0.5, env.y_max + 0.5)
+    # 添加边界虚线
+    ax.plot([env.x_min, env.x_max, env.x_max, env.x_min, env.x_min],
+            [env.y_min, env.y_min, env.y_max, env.y_max, env.y_min],
+            'k--', alpha=0.5, label='Boundary')
     ax.set_aspect('equal')
     ax.grid(True, alpha=0.3)
     

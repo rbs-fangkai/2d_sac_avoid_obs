@@ -162,10 +162,12 @@ class SACContinuous:
 # 配置障碍物：支持圆形和矩形
 obstacles = [
     {'type': 'rectangle', 'center': [1.0, 2.0], 'width': 0.5, 'height': 2.0},
-    # {'type': 'circle', 'center': [1.0, 1.0], 'radius': 0.3},
     {'type': 'rectangle', 'center': [1.5, 0.5], 'width': 0.3, 'height': 1.0},
+    {'type': 'rectangle', 'center': [1.0, -0.5], 'width': 2.0, 'height': 0.6},
+    {'type': 'rectangle', 'center': [-0.5, 1.0], 'width': 1.0, 'height': 0.6},
+    # {'type': 'circle', 'center': [1.0, 1.0], 'radius': 0.3},
 ]
-max_obstacles = 5  # 网络支持的最大障碍物数量
+max_obstacles = len(obstacles)  # 网络支持的最大障碍物数量
 if __name__ == '__main__':
     env_name = 'PointMass-v0'
     
@@ -184,7 +186,7 @@ if __name__ == '__main__':
     actor_lr = 3e-4
     critic_lr = 3e-3
     alpha_lr = 3e-4
-    num_episodes = 1000 # 1000
+    num_episodes = 1000
     hidden_dim = 128
     gamma = 0.99
     tau = 0.005  # 软更新参数
@@ -200,7 +202,7 @@ if __name__ == '__main__':
                           actor_lr, critic_lr, alpha_lr, target_entropy, tau,
                           gamma, device, env.goal_pos, env.obstacles, max_obstacles)
 
-    return_list = rl_utils.train_off_policy_agent(env, agent, num_episodes,
+    return_list, episode_len_list = rl_utils.train_off_policy_agent(env, agent, num_episodes,
                                                   replay_buffer, minimal_size,
                                                   batch_size)
 
@@ -221,15 +223,38 @@ if __name__ == '__main__':
     print(f"模型已保存至: {model_path}")
 
     episodes_list = list(range(len(return_list)))
-    plt.plot(episodes_list, return_list)
-    plt.xlabel('Episodes')
-    plt.ylabel('Returns')
-    plt.title('SAC on {}'.format(env_name))
+    # 左子图绘制每回合奖励
+    plt.figure(figsize=(12, 5))
+    ax = plt.subplot(1, 2, 1)
+    ax.plot(episodes_list, return_list)
+    ax.set_xlabel('Episodes')
+    ax.set_ylabel('Returns')
+    ax.set_title('SAC on {}'.format(env_name))
+    # 右子图绘制每回合长度
+    ax = plt.subplot(1, 2, 2)
+    ax.plot(episodes_list, episode_len_list)
+    ax.set_xlabel('Episodes')
+    ax.set_ylabel('Episode Lengths')
+    ax.set_title('SAC on {}'.format(env_name))
+    plt.tight_layout()
     plt.show()
+    # plt.plot(episodes_list, return_list)
+    # plt.xlabel('Episodes')
+    # plt.ylabel('Returns')
+    # plt.title('SAC on {}'.format(env_name))
+    # plt.show()
 
     mv_return = rl_utils.moving_average(return_list, 9)
+    mv_len = rl_utils.moving_average(episode_len_list, 9)
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 2, 1)
     plt.plot(episodes_list, mv_return)
     plt.xlabel('Episodes')
     plt.ylabel('Returns')
+    plt.title('SAC on {}'.format(env_name))
+    plt.subplot(1, 2, 2)
+    plt.plot(episodes_list, mv_len)
+    plt.xlabel('Episodes')
+    plt.ylabel('Episode Lengths')
     plt.title('SAC on {}'.format(env_name))
     plt.show()
