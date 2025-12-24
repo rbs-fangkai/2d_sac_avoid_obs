@@ -22,7 +22,7 @@ class PointMassEnv:
         self.max_obstacles = max_obstacles
         
         # Environment configuration
-        self.start_pos = np.array([0.0, 2.0])
+        self.start_pos = np.array([0.0, 0.0])
         self.start_vel = np.array([0.0, 0.0])
         self.goal_pos = np.array([8.0, 8.0])
         self.goal_radius = 0.3
@@ -75,8 +75,16 @@ class PointMassEnv:
         self.current_step += 1
         # Clip action (acceleration)
         action = np.clip(action, -self.action_bound, self.action_bound)
+        # 检测action中的nan
+        if np.isnan(action).any():
+            print(f"\n⚠️ 警告: base env输入的 action(来自dp的输出) 包含 NaN 值!")
+            print(f"  action 内容: {action}")
         
         # Extract current position and velocity
+        # 检测state中的nan
+        if np.isnan(self.state).any():
+            print(f"\n⚠️ 警告: base env状态 state 包含 NaN 值!")
+            print(f"  state 内容: {self.state}")
         curr_pos = self.state[:2]
         curr_vel = self.state[2:]
         
@@ -84,6 +92,10 @@ class PointMassEnv:
         next_vel = curr_vel + action * self.dt
         # Clip velocity to bounds
         next_vel = np.clip(next_vel, -self.velocity_bound, self.velocity_bound)
+        # 检测next_vel中的nan
+        if np.isnan(next_vel).any():
+            print(f"\n⚠️ 警告: base env计算的 next_vel 包含 NaN 值!")
+            print(f"  next_vel 内容: {next_vel}")
         
         # Update position using velocity
         next_pos = curr_pos + next_vel * self.dt
@@ -93,6 +105,10 @@ class PointMassEnv:
         
         # Combine into next state
         next_state = np.concatenate([next_pos, next_vel])
+        # 检测next_state中的nan
+        if np.isnan(next_state).any():
+            print(f"\n⚠️ 警告: base env计算的 next_state 包含 NaN 值!")
+            print(f"  next_state 内容: {next_state}")
         
         # Calculate distances
         dist_to_goal = np.linalg.norm(next_pos - self.goal_pos)
@@ -186,6 +202,22 @@ class PointMassEnv:
         
         else:
             raise ValueError(f"Unknown obstacle type: {obstacle['type']}")
+        
+    def check_trajectory_collision(self, trajectory: np.ndarray) -> bool:
+        """检查轨迹是否与任何障碍物发生碰撞
+        
+        Args:
+            trajectory: 轨迹数组 [T, 2] - 位置序列
+            
+        Returns:
+            是否发生碰撞
+        """
+        for pos in trajectory:
+            for obs in self.obstacles:
+                _, collision = self._distance_to_obstacle(pos, obs)
+                if collision:
+                    return True
+        return False
     
 def env_states_to_network_states(states: torch.Tensor, goal_pos, obstacles: List[Dict], max_obstacles: int = 5) -> torch.Tensor:
     """将环境状态转换为网络输入状态（支持多个障碍物）
@@ -212,6 +244,13 @@ def env_states_to_network_states(states: torch.Tensor, goal_pos, obstacles: List
     device = states.device
     
     # 提取位置和速度
+    # 检测输入nan
+    if torch.isnan(states).any():
+        print(f"\n⚠️ 警告: 输入的 env_states 张量包含 NaN 值!")
+        print(f"  env_states 形状: {states.shape}")
+        print(f"  env_states 统计: min={states[~torch.isnan(states)].min() if (~torch.isnan(states)).any() else 'all NaN'}, "
+              f"max={states[~torch.isnan(states)].max() if (~torch.isnan(states)).any() else 'all NaN'}")
+    
     positions = states[:, :2]  # [batch_size, 2]
     velocities = states[:, 2:4]  # [batch_size, 2]
     
@@ -248,4 +287,11 @@ def env_states_to_network_states(states: torch.Tensor, goal_pos, obstacles: List
     
     # 拼接所有特征：位置 + 速度 + 目标信息 + 障碍物信息
     network_states = torch.cat([positions, velocities, goal_rel_dirs, goal_rel_dists, obs_features], dim=1)
+    # 检测输出nan
+    if torch.isnan(network_states).any():
+        print(f"\n⚠️ 警告: 输出的 network_states 张量包含 NaN 值!")
+        print(f"  network_states 形状: {network_states.shape}")
+        print(f"  network_states 统计: min={network_states[~torch.isnan(network_states)].min() if (~torch.isnan(network_states)).any() else 'all NaN'}, "
+              f"max={network_states[~torch.isnan(network_states)].max() if (~torch.isnan(network_states)).any() else 'all NaN'}")
+        
     return network_states

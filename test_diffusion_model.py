@@ -16,109 +16,23 @@ def load_model(model_path, network_state_dim, hidden_dim, noise_dim, device):
     
     return actor
 
-def test_episode(dp_env, actor, device, max_obstacles, episode_seed=None, render=True):
-    """
-    测试一个回合（使用 diffusion policy）
-    
-    Args:
-        dp_env: Diffusion Policy Environment
-        actor: 策略网络（输出噪声）
-        device: torch device
-        max_obstacles: 最大障碍物数量
-        episode_seed: 固定种子（None=随机，整数=固定结果）
-        render: 是否渲染
-    
-    Returns:
-        total_reward: 总奖励
-        trajectory: 轨迹数组
-        noise_history: 噪声历史 {'mu': [...], 'std': [...]}
-    """
-    # 如果提供了固定种子，设置所有随机性
-    if episode_seed is not None:
-        np.random.seed(episode_seed)
-        torch.manual_seed(episode_seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(episode_seed)
-    
+def test_episode(dp_env:DiffusionPolicyEnv, actor_dim, device, max_obstacles, render=True):
+    """测试一个回合（使用 diffusion policy）"""
     state = dp_env.reset()
     done = False
     total_reward = 0
     trajectory = [state.copy()]
-    noise_history = {'mu': [], 'std': [], 'noise_sample': []}  # 记录mu、std和采样的噪声
     
     while not done:
         state_tensor = torch.tensor([state], dtype=torch.float).to(device)
-        with torch.no_grad():
-            network_state = env_states_to_network_states(
-                state_tensor, dp_env.goal_pos, dp_env.obstacles, max_obstacles
-            )
-            # 直接从actor获取所有返回值
-            noise, log_prob, mu, std = actor(network_state)
-        
-        # 转换为numpy
-        noise_np = noise.cpu().numpy()[0]
-        mu_np = mu.cpu().numpy()[0]
-        std_np = std.cpu().numpy()[0]
-        
-        # 记录所有参数
-        noise_history['mu'].append(mu_np)
-        noise_history['std'].append(std_np)
-        noise_history['noise_sample'].append(noise_np)
-        
-        # 使用 dp_env.step 自动通过 diffusion model 生成动作
-        next_state, reward, done, _ = dp_env.step(noise_np)
+        noise = np.random.normal(0, 1, size=actor_dim) # 使用正态分布噪声
+        # noise = np.array([-1.34, 5.78])  # 手动设置噪声，便于调试
+        next_state, reward, done, _ = dp_env.step(noise) # 使用 dp_env.step 自动通过 diffusion model 生成动作
         total_reward += reward
         state = next_state
         trajectory.append(state.copy())
     
-    return total_reward, np.array(trajectory), noise_history
-
-def visualize_noise(noise_history, episode_num):
-    """可视化噪声参数（策略网络的mu、std和采样的noise_sample）"""
-    mu_array = np.array(noise_history['mu'])  # shape: (T, action_dim)
-    std_array = np.array(noise_history['std'])  # shape: (T, action_dim)
-    noise_array = np.array(noise_history['noise_sample'])  # shape: (T, action_dim)
-    timesteps = np.arange(len(mu_array))
-    
-    fig, axes = plt.subplots(3, 1, figsize=(10, 12))
-    
-    # 子图1: 策略网络的mu（噪声分布均值）
-    ax1 = axes[0]
-    for i in range(mu_array.shape[1]):
-        ax1.plot(timesteps, mu_array[:, i], label=f'μ (dim {i})', alpha=0.8, linewidth=2)
-    ax1.axhline(y=0, color='red', linestyle='--', alpha=0.6, linewidth=2, label='N(0,1) mean')
-    ax1.set_xlabel('Timestep', fontsize=12)
-    ax1.set_ylabel('Noise Mean (μ)', fontsize=12)
-    ax1.set_title(f'Episode {episode_num} - Policy Network μ (Mean Parameter)', fontsize=14, fontweight='bold')
-    ax1.legend(loc='best')
-    ax1.grid(True, alpha=0.3)
-    
-    # 子图2: 策略网络的std（噪声分布标准差）
-    ax2 = axes[1]
-    for i in range(std_array.shape[1]):
-        ax2.plot(timesteps, std_array[:, i], label=f'σ (dim {i})', alpha=0.8, linewidth=2)
-    ax2.axhline(y=1.0, color='red', linestyle='--', alpha=0.6, linewidth=2, label='N(0,1) std')
-    ax2.set_xlabel('Timestep', fontsize=12)
-    ax2.set_ylabel('Noise Std (σ)', fontsize=12)
-    ax2.set_title(f'Episode {episode_num} - Policy Network σ (Std Parameter)', fontsize=14, fontweight='bold')
-    ax2.legend(loc='best')
-    ax2.grid(True, alpha=0.3)
-    ax2.set_ylim(bottom=0)  # 标准差非负
-    
-    # 子图3: 实际采样的noise_sample
-    ax3 = axes[2]
-    for i in range(noise_array.shape[1]):
-        ax3.plot(timesteps, noise_array[:, i], label=f'z (dim {i})', alpha=0.8, linewidth=2)
-    ax3.set_xlabel('Timestep', fontsize=12)
-    ax3.set_ylabel('Sampled Noise (z)', fontsize=12)
-    ax3.set_title(f'Episode {episode_num} - Sampled Noise (noise_sample)', fontsize=14, fontweight='bold')
-    ax3.legend(loc='best')
-    ax3.grid(True, alpha=0.3)
-    ax3.axhline(y=0, color='k', linestyle='--', alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(f'test_sac_visual/sac_test_noise_episode_{episode_num}.png', dpi=150)
-    plt.close()
+    return total_reward, np.array(trajectory)
 
 def visualize_trajectory(env, trajectory, episode_num, success):
     """可视化轨迹（支持多种障碍物类型）"""
@@ -180,16 +94,10 @@ def visualize_trajectory(env, trajectory, episode_num, success):
     ax.legend(loc='upper left')
     
     plt.tight_layout()
-    plt.savefig(f'test_sac_visual/sac_test_episode_{episode_num}.png', dpi=150)
+    plt.savefig(f'test_diffusion_visual/diffusion_test_episode_{episode_num}.png', dpi=150)
     # plt.show()
 
 def main():
-    # ========== 配置参数 ==========
-    # 测试配置
-    USE_FIXED_SEED = True  # 开关：True=固定种子(可复现), False=随机测试
-    FIXED_SEED = 114514        # 固定种子值（仅当 USE_FIXED_SEED=True 时生效）
-    PLOT_NOISE = True          # 开关：True=绘制噪声图表, False=不绘制
-    
     # 参数设置（与训练时保持一致）
     model_path = 'sac_pointmass_model.pth'
     hidden_dim = 128
@@ -275,28 +183,13 @@ def main():
     print("模型加载成功！")
     
     # 测试多个回合
-    num_test_episodes = 1
+    num_test_episodes = 100
     rewards = []
     success_count = 0
     
-    # 显示测试模式
-    if USE_FIXED_SEED:
-        print(f"\n🔒 固定种子模式: 使用种子 {FIXED_SEED}（结果可复现）")
-    else:
-        print(f"\n🎲 随机测试模式: 每次测试结果不同（更全面评估）")
-    
-    # 显示噪声绘制模式
-    if PLOT_NOISE:
-        print("📊 噪声可视化: 开启（将绘制噪声图表）")
-    else:
-        print("📊 噪声可视化: 关闭")
-    
     print(f"\n开始测试 {num_test_episodes} 个回合...")
     for i in range(num_test_episodes):
-        # 根据配置决定是否使用固定种子
-        episode_seed = FIXED_SEED if USE_FIXED_SEED else None
-        # episode_seed = FIXED_SEED + i if USE_FIXED_SEED else None
-        reward, env_state_trajectory, noise_history = test_episode(dp_env, actor, device, max_obstacles, episode_seed=episode_seed)
+        reward, env_state_trajectory = test_episode(dp_env, noise_dim, device, max_obstacles)
         rewards.append(reward)
         
         # 检查是否成功（到达目标点）- 提取位置信息 (前两维)
@@ -314,9 +207,6 @@ def main():
         # 可视化前 n 个回合
         if i < 10:
             visualize_trajectory(dp_env.base_env, env_state_trajectory, i+1, success)
-            # 根据开关决定是否绘制噪声图表
-            if PLOT_NOISE:
-                visualize_noise(noise_history, i+1)
     
     # 统计结果
     print("\n" + "="*50)
@@ -346,7 +236,7 @@ def main():
     plt.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('test_sac_visual/test_results.png', dpi=150)
+    plt.savefig('test_diffusion_visual/test_results.png', dpi=150)
     # plt.show()
 
 if __name__ == '__main__':
