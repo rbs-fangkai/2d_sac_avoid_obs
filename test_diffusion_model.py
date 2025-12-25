@@ -164,6 +164,7 @@ def main():
         act_std = None
     
     # 创建 Diffusion Policy Environment
+    # 使用DDIM采样进行推理加速测试
     dp_env = DiffusionPolicyEnv(
         base_env=base_env,
         diffusion_model=diffusion_model,
@@ -173,8 +174,10 @@ def main():
         obs_std=obs_std,
         act_mean=act_mean,
         act_std=act_std,
-        use_strided_sampling=True,  # 开关：True=快速训练, False=高精度
-        sampling_steps=50,  # 跳步时的采样步数（仅use_strided_sampling=True时生效）
+        use_ddim=True,  # 开关：True=DDIM采样（确定性，快速）, False=DDPM采样
+        use_strided_sampling=False,  # 开关：True=DDPM跳步, False=DDPM完整（仅use_ddim=False时有效）
+        sampling_steps=50,  # 采样步数（50步约20x加速）
+        ddim_eta=0.0,  # DDIM随机性：0=完全确定性（推荐），1=等价DDPM
     )
     
     # 加载模型

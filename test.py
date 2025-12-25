@@ -186,7 +186,8 @@ def visualize_trajectory(env, trajectory, episode_num, success):
 def main():
     # ========== 配置参数 ==========
     # 测试配置
-    USE_FIXED_SEED = True  # 开关：True=固定种子(可复现), False=随机测试
+    # USE_FIXED_SEED = True  # 开关：True=固定种子(可复现), False=随机测试
+    USE_FIXED_SEED = False  # 开关：True=固定种子(可复现), False=随机测试
     FIXED_SEED = 114514        # 固定种子值（仅当 USE_FIXED_SEED=True 时生效）
     PLOT_NOISE = True          # 开关：True=绘制噪声图表, False=不绘制
     
@@ -265,8 +266,10 @@ def main():
         obs_std=obs_std,
         act_mean=act_mean,
         act_std=act_std,
-        use_strided_sampling=True,  # 开关：True=快速训练, False=高精度
-        sampling_steps=50,  # 跳步时的采样步数（仅use_strided_sampling=True时生效）
+        use_ddim=True,  # 开关：True=DDIM采样（推荐）, False=DDPM采样
+        use_strided_sampling=False,  # 开关：True=DDPM跳步, False=DDPM完整（仅use_ddim=False时有效）
+        sampling_steps=50,  # 采样步数
+        ddim_eta=0.0,  # DDIM随机性：0=完全确定性（推荐），1=等价DDPM
     )
     
     # 加载模型
@@ -275,7 +278,7 @@ def main():
     print("模型加载成功！")
     
     # 测试多个回合
-    num_test_episodes = 1
+    num_test_episodes = 100
     rewards = []
     success_count = 0
     

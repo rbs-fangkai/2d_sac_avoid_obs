@@ -28,8 +28,9 @@ class PolicyNetNoise(torch.nn.Module):
         # 限制 mu 和 std 的范围，防止生成极端的噪声值
         # Diffusion model 训练时的噪声通常在 N(0,1) 附近
         # mu = torch.clamp(mu, min=-5.0, max=5.0)  # 先裁剪到安全范围
-        mu = torch.tanh(mu) * 1.0  # 然后压缩到 [-1, 1]
-        std = torch.clamp(std, min=0.1, max=1.0)  # 限制标准差在合理范围
+        mu = torch.tanh(mu) * 1.0  # 然后压缩到 [-0.7, 0.7]
+        std = torch.clamp(std, min=0.1, max=1.5)  # 限制标准差在合理范围
+        # std = torch.tanh(std) * 0.4 + 0.6  # 压缩到 [0.2, 1.0]
         
         # 检测 NaN
         if torch.isnan(mu).any() or torch.isnan(std).any():
@@ -101,8 +102,8 @@ class SACContinuous:
         state = torch.tensor(state, dtype=torch.float).unsqueeze(0).to(self.device)
         # 将环境state转换为网络state
         network_state = env_states_to_network_states(state, self.goal, self.obstacles, self.max_obstacles)
-        noise, _, _, _ = self.actor(network_state)  # 只需要noise，忽略log_prob, mu, std
-        return noise.cpu().detach().numpy().flatten()
+        noise, _, mu, std = self.actor(network_state)  # 只需要noise，忽略log_prob, mu, std
+        return noise.cpu().detach().numpy().flatten(), mu.cpu().detach().numpy().flatten(), std.cpu().detach().numpy().flatten()
 
     def calc_target(self, rewards, next_states, dones):  # 计算目标Q值
         next_actions, log_prob, _, _ = self.actor(next_states)  # 忽略mu和std
@@ -253,9 +254,16 @@ if __name__ == '__main__':
     # 创建 Diffusion Policy Environment
     # 注意：T必须与训练diffusion model时的值一致（1000），否则会导致参数不匹配
     # 
-    # 性能优化选项：
-    # - use_strided_sampling=True: 跳步采样，速度快（推荐训练时使用）
-    # - use_strided_sampling=False: 完整1000步，精度高（推荐测试/评估时使用）
+    # 性能优化选项（三种模式，互斥）：
+    # 1. DDIM采样（推荐）：use_ddim=True, sampling_steps=50
+    #    - 确定性采样，速度最快，质量高
+    #    - 适用于训练和测试
+    # 2. DDPM跳步采样：use_ddim=False, use_strided_sampling=True, sampling_steps=50
+    #    - 随机采样，速度较快
+    #    - 适用于训练
+    # 3. 完整DDPM采样：use_ddim=False, use_strided_sampling=False
+    #    - 1000步完整采样，精度最高，速度最慢
+    #    - 适用于最终评估
     dp_env = DiffusionPolicyEnv(
         base_env=base_env,
         diffusion_model=diffusion_model,
@@ -265,8 +273,10 @@ if __name__ == '__main__':
         obs_std=obs_std,
         act_mean=act_mean,
         act_std=act_std,
-        use_strided_sampling=True,  # 开关：True=快速训练, False=高精度
-        sampling_steps=50,  # 跳步时的采样步数（仅use_strided_sampling=True时生效）
+        use_ddim=True,  # 开关：True=DDIM采样（推荐）, False=DDPM采样
+        use_strided_sampling=False,  # 开关：True=DDPM跳步, False=DDPM完整（仅use_ddim=False时有效）
+        sampling_steps=50,  # 采样步数（use_ddim=True或use_strided_sampling=True时生效）
+        ddim_eta=0.0,  # DDIM随机性：0=完全确定性（推荐），1=等价DDPM（仅use_ddim=True时有效）
     )
     
     base_env.seed(0)

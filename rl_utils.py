@@ -165,7 +165,7 @@ def train_off_policy_agent(env, agent, num_episodes, replay_buffer, minimal_size
                 state = env.reset()
                 done = False
                 while not done:
-                    action = agent.take_action(state)
+                    action, mu, std = agent.take_action(state)
                     next_state, reward, done, _ = env.step(action)
                     # 将经验存入回放缓冲区（关键：保存起来以后还能用）
                     replay_buffer.add(state, action, reward, next_state, done)

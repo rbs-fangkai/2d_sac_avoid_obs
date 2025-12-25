@@ -77,6 +77,8 @@ class DiffusionPolicyEnv:
         act_std: np.ndarray = None,
         use_strided_sampling: bool = True,  # 是否使用跳步采样加速
         sampling_steps: int = 100,  # 实际采样步数（跳步采样时使用）
+        use_ddim: bool = False,  # 是否使用DDIM采样（更快更稳定）
+        ddim_eta: float = 0.0,  # DDIM随机性参数（0=确定性，1=DDPM）
     ):
         """
         Args:
@@ -88,27 +90,39 @@ class DiffusionPolicyEnv:
             act_mean, act_std: 用于反标准化 action 的参数
             use_strided_sampling: 是否使用跳步采样（True=快速模式，False=完整1000步）
             sampling_steps: 实际采样步数（仅在 use_strided_sampling=True 时有效）
+            use_ddim: 是否使用DDIM采样（True=DDIM，False=DDPM）
+            ddim_eta: DDIM随机性参数（0=完全确定性，1=等价于DDPM）
         """
         self.base_env = base_env
         self.diffusion_model = diffusion_model
         self.device = device
         self.T = T
         self.use_strided_sampling = use_strided_sampling
+        self.use_ddim = use_ddim
+        self.ddim_eta = ddim_eta
         
-        # 配置采样步数
-        if use_strided_sampling:
-            # 跳步采样：只采样部分时间步
-            self.sampling_steps = min(sampling_steps, T)  # 确保不超过总步数
-            self.stride = T // self.sampling_steps  # 步长
+        # 配置采样步数和模式
+        if use_ddim:
+            # DDIM采样：使用确定性隐式采样
+            self.sampling_steps = min(sampling_steps, T)
+            # DDIM使用linspace均匀分布时间步
+            times = torch.linspace(0, T - 1, steps=self.sampling_steps + 1).long().to(device)
+            self.sampling_timesteps = torch.flip(times, [0]).tolist()  # 从T-1到0
+            print(f"⚡ DDIM采样已启用: T={T}, 采样步数={self.sampling_steps}, eta={ddim_eta}")
+            print(f"   加速比: {T / self.sampling_steps:.1f}x (确定性采样)")
+        elif use_strided_sampling:
+            # DDPM跳步采样：只采样部分时间步
+            self.sampling_steps = min(sampling_steps, T)
+            self.stride = T // self.sampling_steps
             self.sampling_timesteps = list(range(0, T, self.stride))[:self.sampling_steps]
             if self.sampling_timesteps[-1] != T - 1:
-                self.sampling_timesteps.append(T - 1)  # 确保包含最后一步
-            print(f"🚀 跳步采样已启用: T={T}, 实际采样步数={len(self.sampling_timesteps)}, 步长={self.stride}")
+                self.sampling_timesteps.append(T - 1)
+            print(f"🚀 DDPM跳步采样已启用: T={T}, 实际采样步数={len(self.sampling_timesteps)}, 步长={self.stride}")
             print(f"   加速比: {T / len(self.sampling_timesteps):.1f}x")
         else:
-            # 完整采样：使用所有时间步
+            # 完整DDPM采样：使用所有时间步
             self.sampling_timesteps = list(range(T))
-            print(f"⏱️  完整采样模式: 使用全部 {T} 步（精度最高，速度较慢）")
+            print(f"⏱️  完整DDPM采样: 使用全部 {T} 步（精度最高，速度较慢）")
         
         # 标准化参数
         self.obs_mean = torch.from_numpy(obs_mean).float().to(device) if obs_mean is not None else None
@@ -223,6 +237,62 @@ class DiffusionPolicyEnv:
             return mu + torch.sqrt(var) * noise
     
     @torch.no_grad()
+    def _ddim_sample_step(self, a_t, t, t_next, obs_cond):
+        """
+        DDIM单步采样 (确定性隐式采样)
+        参考: Denoising Diffusion Implicit Models (DDIM)
+        
+        Args:
+            a_t: [B, act_dim] - 当前时间步的动作
+            t: int - 当前时间步
+            t_next: int - 下一个时间步
+            obs_cond: [B, obs_dim] - 观测条件（已标准化）
+        
+        Returns:
+            a_{t_next}: [B, act_dim] - 下一时间步的动作
+        """
+        bsz = a_t.size(0)
+        t_batch = torch.full((bsz,), t, device=self.device, dtype=torch.long)
+        
+        # 1. 预测噪声
+        eps_theta = self.diffusion_model(a_t, t_batch, obs_cond)
+
+        # 检查diffusion model输出（NaN源头）
+        if torch.isnan(eps_theta).any() or torch.isinf(eps_theta).any():
+            print(f"\n⚠️ 警告 [NaN源头]: Diffusion model 在 t={t} 时输出包含 NaN/Inf!")
+            print(f"  eps_theta 形状: {eps_theta.shape}")
+            print(f"  eps_theta 统计: min={eps_theta[~torch.isnan(eps_theta)].min() if (~torch.isnan(eps_theta)).any() else 'all NaN'}, "
+                  f"max={eps_theta[~torch.isnan(eps_theta)].max() if (~torch.isnan(eps_theta)).any() else 'all NaN'}")
+            print(f"  a_t 范围: [{a_t.min():.4f}, {a_t.max():.4f}]")
+            print(f"  obs_cond 范围: [{obs_cond.min():.4f}, {obs_cond.max():.4f}]")
+        
+        # 2. 获取alpha参数
+        alpha = self.alphas_cumprod[t]
+        alpha_next = self.alphas_cumprod[t_next] if t_next >= 0 else torch.tensor(1.0, device=self.device)
+        
+        # 3. 预测x0 (去噪后的动作)
+        pred_a0 = (a_t - torch.sqrt(1 - alpha) * eps_theta) / torch.sqrt(alpha)
+        pred_a0 = torch.clamp(pred_a0, -3.0, 3.0)  # 限制范围防止不稳定
+        
+        # 4. DDIM公式计算a_{t_next}
+        # 计算随机性参数sigma
+        sigma = self.ddim_eta * torch.sqrt(
+            (1 - alpha_next) / (1 - alpha) * (1 - alpha / alpha_next)
+        )
+        
+        # 指向x_t的方向
+        c2 = torch.sqrt(1 - alpha_next - sigma ** 2)
+        dir_at = c2 * eps_theta
+        
+        # 随机噪声项（eta=0时为0，完全确定性）
+        noise = torch.randn_like(a_t) if sigma > 0 else 0.0
+        
+        # 组合得到a_{t_next}
+        a_next = torch.sqrt(alpha_next) * pred_a0 + dir_at + sigma * noise
+        
+        return a_next
+    
+    @torch.no_grad()
     def generate_action(self, state, initial_noise):
         """
         使用 diffusion model 从状态和初始噪声生成动作
@@ -256,9 +326,18 @@ class DiffusionPolicyEnv:
             print(f"  initial_noise 内容: {initial_noise}")
         a_t = initial_noise
         
-        # 逆扩散过程（根据配置使用跳步或完整采样）
-        for t in reversed(self.sampling_timesteps):
-            a_t = self._p_sample_step(a_t, t, obs_norm)
+        # 根据配置选择采样方式
+        if self.use_ddim:
+            # DDIM采样：使用确定性隐式采样
+            time_pairs = list(zip(self.sampling_timesteps[:-1], self.sampling_timesteps[1:]))
+            for t, t_next in time_pairs:
+                a_t = self._ddim_sample_step(a_t, t, t_next, obs_norm)
+                a_t = torch.clamp(a_t, -3.0, 3.0)  # 限制范围防止不稳定
+        else:
+            # DDPM采样：传统祖先采样（可能是跳步或完整）
+            for t in reversed(self.sampling_timesteps):
+                a_t = self._p_sample_step(a_t, t, obs_norm)
+                a_t = torch.clamp(a_t, -3.0, 3.0)  # 限制范围防止不稳定
         
         # 反标准化到真实动作空间
         action = self._denormalize_action(a_t)
